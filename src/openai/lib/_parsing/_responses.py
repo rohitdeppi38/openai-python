@@ -156,6 +156,10 @@ def parse_text(text: str, text_format: type[TextFormatT] | Omit, *, phase: str |
     if not is_given(text_format):
         return None
 
+    # Null or empty text has no structured result, matching Chat Completions parsing.
+    if not text:
+        return None
+
     if is_basemodel_type(text_format):
         return cast(TextFormatT, model_parse_json(text_format, text))
 
