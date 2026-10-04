@@ -9,6 +9,7 @@ from inline_snapshot import snapshot
 from tests import respx2
 from openai import OpenAI, OAuthError
 from openai.auth import WorkloadIdentity, WorkloadIdentityAuth, SubjectTokenWorkloadIdentity
+from openai._exceptions import SubjectTokenProviderError
 from tests.respx2.models import Call
 from openai.auth._workload import (
     gcp_id_token_provider,
@@ -198,3 +199,86 @@ def test_gcp_id_token_provider() -> None:
 
     assert provider["token_type"] == "id"
     assert provider["get_token"]() == "gcp-token"
+
+
+def test_k8s_service_account_token_provider_empty_file(tmp_path: Path) -> None:
+    token_file = tmp_path / "token"
+    token_file.write_text("  \n")
+
+    provider = k8s_service_account_token_provider(token_file)
+
+    with pytest.raises(SubjectTokenProviderError) as exc:
+        provider["get_token"]()
+
+    assert str(exc.value) == f"The token file at {token_file} is empty."
+    assert exc.value.__cause__ is None
+
+
+def test_k8s_service_account_token_provider_wraps_read_errors(tmp_path: Path) -> None:
+    token_file = tmp_path / "missing"
+
+    provider = k8s_service_account_token_provider(token_file)
+
+    with pytest.raises(SubjectTokenProviderError) as exc:
+        provider["get_token"]()
+
+    assert str(exc.value).startswith(f"Failed to read the token file at {token_file}: ")
+    assert isinstance(exc.value.__cause__, FileNotFoundError)
+
+
+@respx2.mock
+@pytest.mark.parametrize(
+    "response, message",
+    [
+        (
+            httpx2.Response(500, text="Internal Server Error"),
+            "Failed to fetch Azure subject token from IMDS: HTTP 500",
+        ),
+        (
+            httpx2.Response(200, json={}),
+            "Azure IMDS response did not include an access_token",
+        ),
+    ],
+)
+def test_azure_managed_identity_token_provider_preserves_response(response: httpx2.Response, message: str) -> None:
+    respx2.get("http://169.254.169.254/metadata/identity/oauth2/token").mock(return_value=response)
+
+    provider = azure_managed_identity_token_provider()
+
+    with pytest.raises(SubjectTokenProviderError) as exc:
+        provider["get_token"]()
+
+    assert str(exc.value) == message
+    assert exc.value.response is not None
+    assert exc.value.response.status_code == response.status_code
+    assert exc.value.__cause__ is None
+
+
+@respx2.mock
+@pytest.mark.parametrize(
+    "response, message",
+    [
+        (
+            httpx2.Response(500, text="Internal Server Error"),
+            "Failed to fetch GCP subject token from metadata server: HTTP 500",
+        ),
+        (
+            httpx2.Response(200, text="  "),
+            "GCP metadata server returned an empty token",
+        ),
+    ],
+)
+def test_gcp_id_token_provider_preserves_response(response: httpx2.Response, message: str) -> None:
+    respx2.get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity").mock(
+        return_value=response
+    )
+
+    provider = gcp_id_token_provider()
+
+    with pytest.raises(SubjectTokenProviderError) as exc:
+        provider["get_token"]()
+
+    assert str(exc.value) == message
+    assert exc.value.response is not None
+    assert exc.value.response.status_code == response.status_code
+    assert exc.value.__cause__ is None

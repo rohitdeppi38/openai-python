@@ -94,6 +94,8 @@ def k8s_service_account_token_provider(
                 if not token:
                     raise SubjectTokenProviderError(f"The token file at {token_file_path} is empty.")
                 return token
+        except SubjectTokenProviderError:
+            raise
         except Exception as e:
             raise SubjectTokenProviderError(f"Failed to read the token file at {token_file_path}: {e}") from e
 
@@ -154,6 +156,8 @@ def azure_managed_identity_token_provider(
                     "Azure IMDS response did not include an access_token", response=response
                 )
             return cast(str, token)
+        except SubjectTokenProviderError:
+            raise
         except Exception as e:
             raise SubjectTokenProviderError(f"Failed to fetch Azure subject token from IMDS: {e}") from e
 
@@ -198,6 +202,8 @@ def gcp_id_token_provider(
             if not token:
                 raise SubjectTokenProviderError("GCP metadata server returned an empty token", response=response)
             return token
+        except SubjectTokenProviderError:
+            raise
         except Exception as e:
             raise SubjectTokenProviderError(f"Failed to fetch GCP subject token from metadata server: {e}") from e
 
